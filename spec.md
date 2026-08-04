@@ -112,7 +112,6 @@ The permit receipt MUST contain: `action_ref`, `verdict`, `scope_evaluated`, `de
 
 **Reference implementations:**
 - APS `ProxyGateway`: `evaluateAction` produces the permit receipt (intent + decision signatures), `completeAction` produces the outcome receipt (receipt signature). The 3-signature proof chain (request, decision, receipt) satisfies bilateral receipt linking via shared `requestId`.
-- asqav-mcp `enforced_tool_call`: tool proxy with ML-DSA-65 post-quantum signatures. The enforced call produces both pre-execution gate signature and post-execution attestation in a single atomic boundary.
 
 ### 4.2 Bounded Tier
 
@@ -124,7 +123,6 @@ The detectability argument is what separates this tier from no enforcement at al
 
 **Reference implementations:**
 - APS execution envelope: bundles intent, decision, receipt, and delegation reference into a single signed artifact. The envelope is signed by the gateway, and any modification to the envelope invalidates the signature.
-- asqav-mcp `gate_action`: pre-execution policy gate that signs the authorization decision. The gate signature is required for downstream processing.
 
 ### 4.3 Detectable-only Tier
 
@@ -134,7 +132,6 @@ The chain MUST be append-only. Each record MUST include `previous_record_hash`. 
 
 **Reference implementations:**
 - APS receipt ledger: Merkle-committed batches of evaluation receipts. Receipt window seals provide periodic integrity checkpoints with gateway signatures.
-- asqav-mcp `sign_action`: produces signed action records that can be independently verified. Chain integrity is maintained via `previousReceiptHash` linking.
 
 ### 4.4 Gating Rule
 
@@ -154,32 +151,11 @@ Each enforceability tier SHOULD have test vectors demonstrating correct classifi
 
 Test vectors for the Strong tier MUST include both the permit receipt and the outcome receipt, demonstrating the bilateral linkage.
 
-Reference test vectors: APS `interop/fixtures/` (happy-path, revoked-ancestor, stale-replay, cross-algo-mismatch). Additional vectors from asqav-mcp will be contributed as the ML-DSA-65 implementation matures.
+Reference test vectors: APS `interop/fixtures/` (happy-path, revoked-ancestor, stale-replay, cross-algo-mismatch).
 
 ### 4.6 Tier Declaration
 
 **Normative:** Implementations MUST declare their enforceability tier. The declaration MUST be machine-readable and SHOULD be included in the system's governance metadata (e.g., `aps.txt`, agent card, or MCP server capabilities).
-
-### 4.7 asqav-mcp Tier Mapping
-
-asqav-mcp exposes three governance controls that line up with the three tiers in §4.1-4.3. The tier a control reaches is a property of its enforcement topology, not of its signature suite. asqav-mcp signs with ML-DSA-65 (FIPS 204), and the mapping below holds the same way for an Ed25519 implementation. Each control is taken from the deployed `asqav-mcp` server. Verified against asqav-mcp at commit 0228f7ba (2026-06-17), a snapshot of the implementer's tool surface, not a standing tier assignment.
-
-| Spec tier | asqav-mcp control | Enforcement topology | Receipt structure |
-|-----------|-------------------|----------------------|-------------------|
-| Strong (§4.1) | `enforced_tool_call` | Tool proxy: policy check, then forward to the tool, then sign request and response together. When a separate outcome is needed, the call signs the approval and `complete_action` closes it. | Bilateral: approval signature plus outcome signature, linked by `action_ref` (the `gate_id`). |
-| Bounded (§4.2) | `gate_action` (+ `complete_action`) | Pre-execution gate: signs the decision and returns `APPROVED`, `DENIED`, or `PENDING_APPROVAL`. Execution happens in a separate component; `complete_action` signs the outcome and binds it to the approval by `gate_id`. | Signed gate decision; outcome bound to the approval via `gate_id`. |
-| Detectable-only (§4.3) | `sign_action` | Post-hoc signed record: each governed action produces a signed audit record verifiable on its own. | Signed action record; chain integrity via the previous-receipt hash. |
-
-**Bilateral receipts (Strong).** The `enforced_tool_call` + `complete_action` pair produces the permit and outcome receipts §4.1 requires, linked by `gate_id` as the `action_ref`. The permit records that the request was authorized, and the outcome records what the execution returned. Verifying either signature in isolation leaves the other half of the loop unattested, which is why §4.1 treats the linked pair, not the permit alone, as the defining property.
-
-**Detectability (Bounded).** `gate_action` is a pre-execution gate, not a proxy, so what it offers is the audit invariant described in §4.2. An `APPROVED` decision is signed before the action runs, and an action that reaches the verifier with no matching gate signature is a detectable anomaly. The gate does not physically prevent an action that routes around it. What it provides is that bypassing it leaves a gap a downstream verifier can name.
-
-**Suite-agnostic.** The tier is fixed by topology (proxy, pre-gate, signed record), so swapping ML-DSA-65 for Ed25519 changes the signature bytes but not the tier. This matches how APS (Ed25519) and asqav-mcp (ML-DSA-65) both reach Strong under §4.1.
-
-**Where the mapping is conditional.** Two points are worth stating plainly rather than rounding up:
-
-- `enforced_tool_call` reaches Strong-tier non-bypassability for the agent only when the call is routed through it as the path to the tool and a `tool_endpoint` is supplied, so the response is signed alongside the request. Invoked without a forwarding endpoint, it signs the authorized request but does not by itself prove the agent could not have reached the tool another way. The proxy property is a deployment property, not an unconditional property of the function name. The same caveat the spec raises in §5.2 applies: where the irreversible mutation is downstream and returns no settlement proof, execution-tier Strong does not on its own close the mutation-authority gap.
-- `gate_action`'s detectability holds for action types the gate is configured to govern. A control surface that never registers an action type for gating has no expectation to violate for that type, so the absence of a gate signature would not read as an anomaly. Bounded tier is a claim bounded by the set of governed action types, not a blanket claim over every call the system can make.
 
 ---
 
@@ -265,16 +241,6 @@ The APS SDK provides a reference implementation of all four invariants and demon
 - **Test Suite:** `tests/gateway.test.ts`, `tests/gateway-constraints.test.ts`, `tests/transactional-integrity.test.ts`, `tests/execution-envelope.test.ts`
 
 Published as `agent-passport-system` on [npm](https://www.npmjs.com/package/agent-passport-system).
-
-### A.2 asqav-mcp
-
-The asqav-mcp server provides a second reference implementation using ML-DSA-65 (post-quantum) signatures.
-
-- **enforced_tool_call:** Strong tier - tool proxy with bilateral ML-DSA-65 signatures (pre + post execution)
-- **gate_action:** Bounded tier - pre-execution policy gate with signed authorization decision
-- **sign_action:** Detectable-only tier - signed action records with chain linking
-
-Published as `asqav-mcp` (repository: [asqav-mcp](https://github.com/jagmarques/asqav-mcp)).
 
 ---
 
@@ -551,23 +517,3 @@ Tampering with any field in the execution envelope breaks the signature.
 - [MITRE ATLAS](https://atlas.mitre.org/) - Adversarial Threat Landscape for AI Systems
 - Pidlisnyi, T. "The Agent Social Contract" (2026). Zenodo DOI: 10.5281/zenodo.18749779
 - Pidlisnyi, T. "Faceted Authority Attenuation" (2026). Zenodo DOI: 10.5281/zenodo.19260073
-
-### External Test Vectors: asqav-mcp (ML-DSA-65)
-
-9 test vectors contributed by [@jagmarques](https://github.com/jagmarques) from the asqav-mcp implementation, covering all three enforceability tiers with real ML-DSA-65 (post-quantum) signatures.
-
-Repository: [jagmarques/execution-boundary-test-vectors](https://github.com/jagmarques/execution-boundary-test-vectors)
-
-| Vector ID | Tier | Description | Validated |
-|-----------|------|-------------|-----------|
-| strong-bilateral-receipt | Strong | Permit + outcome linked by action_ref | APS ✓, asqav ✓ |
-| strong-three-sig-proof-chain | Strong | Intent + permit + outcome, 3 ML-DSA-65 sigs | APS ✓, asqav ✓ |
-| strong-incomplete-proof-chain | Strong | Missing outcome — correctly fails §4.4 gating rule | APS ✓, asqav ✓ |
-| bounded-gate-permit | Bounded | Gate permit with ML-DSA-65 signature | APS ✓, asqav ✓ |
-| bounded-gate-deny | Bounded | Gate denial (denials are attested) | APS ✓, asqav ✓ |
-| bounded-missing-gate | Bounded | No gate signature — bypass detectable | APS ✓, asqav ✓ |
-| detectable-basic-sign | Detectable | Signed action record | APS ✓, asqav ✓ |
-| detectable-chain-link | Detectable | Chain-linked record with previous_signature_hash | APS ✓, asqav ✓ |
-| detectable-tamper-detection | Detectable | Tampered record — no valid signature | APS ✓, asqav ✓ |
-
-All 10 signature IDs independently verifiable at `https://api.asqav.com/api/v1/verify/{signature_id}`.
